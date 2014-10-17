@@ -1,0 +1,19 @@
+ECE 254: Operating Systems Lab 3/Lab 4
+Bounded Producer/Consumer Problem Implemented in two ways with
+Message Passing and Threads
+Includes both .c files intended to be run on a posix compatible linux OS
+and Kiel projects intended to be run on the in-lab Kiel boards
+Mohit Gupta m23gupta 
+Siddharth Ramesh s7ramesh
+
+To build linux files run:
+1) for the shared memeory
+gcc -lrt -lm -lpthread lab3_threads.c -o produce
+
+2) for the message queuey
+gcc -lrt -lm lab3_mq.c -o produce
+
+
+The Kiel projects are two directories, each containing the project space for the Message Queue and Shared Memory projects
+Set target to ram or simulator and load/debug
+
