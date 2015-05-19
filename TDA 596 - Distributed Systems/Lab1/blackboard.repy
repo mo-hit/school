@@ -1,0 +1,66 @@
+def board(ip, port, sockobj, thiscommhandle, listencommhandle):
+  msgheader = sockobj.recv(1024) # Receive message,
+  # React depending on message type: HTTP GET or POST, or some other type of communication.
+  if  msgheader.startswith('GET') or msgheader.startswith('POST'):
+    if msgheader.startswith('POST'):
+      # Extract posted message from HTTP request
+      message = msgheader[msgheader.index('comment=')+len('comment='):] + '<br>'
+      mycontext['comment'] += message
+
+    htmlresponse = getHTML(mycontext['comment'])
+    sockobj.send("HTTP/1.1 200 OK\r\nContent-type: text/html\r\n" + \
+    "Content-length: %i\r\n\r\n%s" % (len(htmlresponse), htmlresponse))
+    stopcomm(thiscommhandle)
+
+    if msgheader.startswith('POST'):
+      # Send posted message to all other blackboards
+      for remote_ip in mycontext['ips']:
+        remote_sockobj = openconn(remote_ip, mycontext['port'])
+        # Underscore added to prevent "GET/POST" from being interpreted as HTTP requests
+        remote_sockobj.send('_' + message)
+        remote_sockobj.close()
+  else:
+    # Remove underscore when parsing message
+    mycontext['comment'] += msgheader[1:]
+
+def getHTML(comment):
+  htmlresponse = """
+<html>
+<head>
+  <meta content="text/html; charset=utf-8" http-equiv="content-type">
+  <title>Blackboard GroupName</title>
+</head>
+<body>
+  <h2> Board Content</h2>
+  <p> """ + comment + """ </p>
+  <br>
+  <h3>Submit to board<h3>
+  <textarea rows="4" cols="50" name="comment" form="usrform"></textarea>
+  <form action="" id="usrform" method="post">
+  <input type="submit">
+  </form>
+</body>
+</html>
+"""
+  return htmlresponse
+	
+if callfunc == 'initialize':
+  mycontext['comment'] = ''
+
+  if len(callargs) > 1:
+    raise Exception("Too many call arguments")
+  # Running remotely (assuming that we pass input argument only remotely):
+  # whenever this vessel gets a connection on its IPaddress:Clearinghouseport it'll call function board
+  elif len(callargs) == 1:
+    mycontext['port'] = int(callargs[0])
+    myip = getmyip()
+    ipfile = open("ips.txt", "r")
+    mycontext['ips'] = [ip for ip in [line.rstrip() for line in ipfile] if ip != myip]
+  # Running locally:
+  # whenever we get a connection on 127.0.0.1:12345 we'll call board
+  else:
+    mycontext['port'] = 12345
+    myip = '127.0.0.1'
+    mycontext['ips'] = []
+
+  listencommhandle = waitforconn(myip,mycontext['port'],board)

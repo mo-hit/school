@@ -1,0 +1,176 @@
+def board(ip, port, sockobj, thiscommhandle, listencommhandle):
+  try:
+    msgheader = sockobj.recv(1024) # Receive message,
+  except Exception,e:
+    print "Network error, socket closed?"+ str(e)
+    stopcomm(thiscommhandle) 
+    return
+
+  # React depending on message type: HTTP GET or POST, or some other type of communication.
+  if msgheader.startswith('GET'): 
+    sockobj.send(getHTML(mycontext['comments']))
+    stopcomm(thiscommhandle)
+  elif msgheader.startswith('POST'):
+    # Strictly for leaders
+    if mycontext['myip'] == mycontext['leaderip']:
+      message = msgheader[msgheader.index('comment=')+len('comment='):] + '<br>'
+
+      # Entering critical section, ensuring that accessing the shared data is thread safe
+      mycontext['leaderlock'].acquire()
+      mycontext['comments'] += message 
+
+      # Display updated blackboard
+      sockobj.send(getHTML(mycontext['comments']))
+      stopcomm(thiscommhandle)
+
+      # Send message to all minions so that they have the same thing
+      print 'Sending message to minions'
+      send_to_ips('_M' + message)
+      mycontext['leaderlock'].release()
+    else:
+      # If not the leader then just forward the post to the leader
+      # display your blackboard
+      send_to_ip(mycontext['leaderip'],msgheader)
+      sockobj.send(getHTML(mycontext['comments']))
+      stopcomm(thiscommhandle)
+  else:
+    if msgheader.startswith('_M'):
+      # Update message list on leader
+      if mycontext['myip'] == mycontext['leaderip']:
+        # Entering critical section
+        mycontext['leaderlock'].acquire()
+        print 'Received message from minion'
+        # Messages from minions only contains latest post
+        mycontext['comments'] += msgheader[2:]
+
+        print 'Sending message to minions'
+        send_to_ips('_M' + mycontext['comments'])
+        mycontext['leaderlock'].release()
+      else:
+        # Update list on minion
+        print 'Received message from leader'
+        # Messages from leader always contains all comments to maintain consistency
+        mycontext['comments'] += msgheader[2:]
+
+    elif msgheader.startswith('_L'):
+      # Parse the leaderMessage array
+      leaderMessage = msgheader
+      leaderMessageArr = leaderMessage.split('__')
+      leader_initiator = leaderMessageArr[1]
+      candidate_token = int(leaderMessageArr[2])
+      candidate_ip = leaderMessageArr[3]
+
+      # waiting for initialization to complete
+      # some nodes may stll conducting an election
+      while (not mycontext['initdone']):
+        sleep(1)
+
+      # the we have gone around in a circle and now we should have the leader
+      # update the leader_ip variable accordingly
+      if (leader_initiator == mycontext['myip']):
+        mycontext['leadertoken'] = candidate_token
+        mycontext['leaderip'] = candidate_ip
+        print "Done Leader Election. Leader is: " + str(mycontext['leadertoken']) + " with ip: " + mycontext['leaderip']
+      else:
+        # we are not done the election and need to continue passing the token around the ring
+        if (mycontext['nodeid'] > candidate_token or (mycontext['nodeid'] == candidate_token and mycontext['myip'] > candidate_ip)):
+          leaderMessage = '__'.join(['_L',leader_initiator,str(mycontext['nodeid']),mycontext['myip']])
+        
+        #forward the message
+        if not send_to_ip(mycontext['neighbour'], leaderMessage):
+          print "Ring failed: message being sent to "+ mycontext['neighbour'] + " with contents" + leaderMessage
+        print "Ring succeeded"
+    else:
+      print 'Unknown message received: '+msgheader+' from '+str(ip)+':'+str(port)
+
+def send_to_ip(ip,message):
+  remote_sockobj = None;
+  try: 
+    remote_sockobj = openconn(ip, mycontext['port'])
+    remote_sockobj.send(message)
+    remote_sockobj.close()
+    return True
+  except Exception, e:
+    print "Network error, receiving socket closed? " + str(e)
+    if remote_sockobj :
+      remote_sockobj.close()
+    return False
+
+def send_to_ips(message):
+  for remote_ip in mycontext['ips']:
+    if remote_ip != mycontext['myip']:
+      send_to_ip(remote_ip,message)
+
+def getHTML(comment):
+  leaderfield = ""
+  if mycontext['leaderip']:
+    leaderfield = """<p> Leader: """+ str(mycontext['leadertoken']) + """ with ip: """ + mycontext['leaderip'] + "</p>"
+  htmlresponse = """
+    <html>
+    <head>
+      <meta content="text/html; charset=utf-8" http-equiv="content-type">
+      <title>Blackboard GroupName</title>
+    </head>
+    <body>
+      <h2> Board Content</h2>
+      <p> """ + comment + """ </p>
+      <br>
+      <h3>Submit to board<h3>
+      <textarea rows="4" cols="50" name="comment" form="usrform"></textarea>
+      <form action="" id="usrform" method="post">
+      <input type="submit">
+      </form>
+      <p> """+str(mycontext['nodeid'])+"""</p>
+      <p> """+mycontext['myip']+"""</p> """ + leaderfield+ """
+    </body>
+    </html>
+    """
+  htmlresponse = "HTTP/1.1 200 OK\r\nContent-type: text/html\r\n" + \
+    "Content-length: %i\r\n\r\n%s" % (len(htmlresponse), htmlresponse)
+  return htmlresponse
+
+	
+if callfunc == 'initialize':
+  mycontext['comments'] = '' 
+  mycontext['initdone'] = False
+  mycontext['leaderip'] = None
+  mycontext['leaderlock'] = getlock()
+
+  flag = '0'
+  if len(callargs) > 1:
+    raise Exception("Too many call arguments")
+  # Running remotely (assuming that we pass input argument only remotely):
+  # whenever this vessel gets a connection on its IPaddress:Clearinghouseport it'll call function board
+  elif len(callargs) == 1:
+    mycontext['myip'] = getmyip()
+    mycontext['port'] = int(callargs[0])
+    ipfile = open("ips.txt", "r")
+    mycontext['ips'] = [line.rstrip() for line in ipfile]
+
+    # parse through ips
+    index = mycontext['ips'].index(mycontext['myip'])
+    mycontext['neighbour'] = mycontext['ips'][index-1]
+    mycontext['nodeid'] = int(randomfloat() * 100)
+    print str(mycontext['nodeid']) + " " + mycontext['myip']
+    print "My neighbour is: " + mycontext['neighbour'] 
+
+    listencommhandle = waitforconn(mycontext['myip'],mycontext['port'],board)
+    # sending message with 
+    # myip to hold the initiator
+    # my node id
+    # my ip again to be replaced in this token (if are more suitable candidate exists)
+    leaderMessageArr = ['_L',mycontext['myip'],str(mycontext['nodeid']),mycontext['myip']]
+    leaderMessage = '__'.join(leaderMessageArr)
+    #continue attempting to send until its allowed to initialize
+    while not send_to_ip(mycontext['neighbour'], leaderMessage):
+      print "Init failed: message being sent to "+ mycontext['neighbour'] + " with contents" + leaderMessage
+      sleep(1)
+    mycontext['initdone'] = True
+    print "Init succeeded"
+  # Running locally:
+  # whenever we get a connection on 127.0.0.1:12345 we'll call board
+  else:
+    mycontext['port'] = 12345
+    mycontext['myip'] = '127.0.0.1'
+    mycontext['ips'] = []
+    listencommhandle = waitforconn(mycontext['myip'],mycontext['port'],board)

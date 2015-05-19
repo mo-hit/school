@@ -1,0 +1,131 @@
+def board(ip, port, sockobj, thiscommhandle, listencommhandle):
+  try:
+    msgheader = sockobj.recv(1024) # Receive message,
+  except Exception,e:
+    print "Network error, socket closed?"+ str(e)
+    stopcomm(thiscommhandle) 
+    return
+
+  # React depending on message type: HTTP GET or POST, or some other type of communication.
+  if msgheader.startswith('GET'): 
+    sockobj.send(getHTML(mycontext['comments']))
+    stopcomm(thiscommhandle)
+  elif msgheader.startswith('POST'):
+    if not mycontext['starttime']:
+      mycontext['starttime'] = getruntime()
+    message = msgheader[msgheader.index('comment=')+len('comment='):] + '<br>'
+
+    # Acquire lock to ensure that accessing the shared data is thread safe
+    mycontext['messagelock'].acquire()
+    mycontext['myclock'] += 1
+    mycontext['comments'].append([mycontext['myclock'],mycontext['myip'],message])
+    mycontext['messagelock'].release()
+
+    # Display updated blackboard
+    sockobj.send(getHTML(mycontext['comments']))
+    stopcomm(thiscommhandle)
+
+    # After updating our blackboard we need to now send the message to all other nodes
+    send_to_ips('_M' + str(mycontext['myclock']) + '__1__' +  message)
+  else:
+    if not mycontext['starttime']:
+      mycontext['starttime'] = getruntime()
+    stopcomm(thiscommhandle)
+
+    # Add new message to list
+    if msgheader.startswith('_M'):
+      # Parse the incoming message
+      messageindex = msgheader.index('__1__')
+      # Get the clock value by getting all the characters up to the delimiter
+      clock = int(msgheader[2:messageindex])
+      # Get the message
+      message = msgheader[messageindex+len('__1__'):]
+
+      mycontext['messagelock'].acquire()
+      # This will lead to eventual consistency by updating the clock to the newest value
+      if clock > mycontext['myclock']:
+        mycontext['myclock'] = clock 
+      mycontext['comments'].append([clock,ip,message])
+      # Sort them by the clock value, then ip
+      mycontext['comments'].sort()
+      mycontext['messagelock'].release()
+      mycontext['latency'] = getruntime() - mycontext['starttime']
+      print 'Latency: ' + str(mycontext['latency'])
+    else:
+      print 'Unknown message received: '+msgheader+' from '+str(ip)+':'+str(port)
+
+def send_to_ip(ip,message):
+  remote_sockobj = None;
+  try: 
+    remote_sockobj = openconn(ip, mycontext['port'])
+    remote_sockobj.send(message)
+    remote_sockobj.close()
+    return True
+  except Exception, e:
+    print "Network error, receiving socket closed? " + str(e)
+    if remote_sockobj :
+      remote_sockobj.close()
+    return False
+
+def send_to_ips(message):
+  for remote_ip in mycontext['ips']:
+    if remote_ip != mycontext['myip']:
+      send_to_ip(remote_ip,message)
+
+def getHTML(comments):
+  messageboard = ''
+  for comment in comments:
+    messageboard += str(comment[0]) + ": " + comment[2]
+
+  leaderfield = ""
+  htmlresponse = """
+    <html>
+    <head>
+      <meta content="text/html; charset=utf-8" http-equiv="content-type">
+      <title>Blackboard GroupName</title>
+    </head>
+    <body>
+      <h2> Board Content</h2>
+      <p>""" + messageboard + """</p>
+      <p>Latency: """ + str(mycontext['latency']) + """</p>
+      <br>
+      <h3>Submit to board<h3>
+      <textarea rows="4" cols="50" name="comment" form="usrform"></textarea>
+      <form action="" id="usrform" method="post">
+      <input type="submit">
+      </form>
+    </body>
+    </html>
+    """
+  htmlresponse = "HTTP/1.1 200 OK\r\nContent-type: text/html\r\n" + \
+    "Content-length: %i\r\n\r\n%s" % (len(htmlresponse), htmlresponse)
+  return htmlresponse
+
+  
+if callfunc == 'initialize':
+  #changed this from a string to an array to now hold clock value, message, and the sending ip (to resolve conflicting clock(post) numbers)
+  mycontext['comments'] = [] 
+  mycontext['messagelock'] = getlock()
+  #new clock variable which is essentially the post number
+  mycontext['myclock'] = 0
+  mycontext['starttime'] = None
+  mycontext['latency'] = 'TBA'
+
+  if len(callargs) > 1:
+    raise Exception("Too many call arguments")
+  # Running remotely (assuming that we pass input argument only remotely):
+  # whenever this vessel gets a connection on its IPaddress:Clearinghouseport it'll call function board
+  elif len(callargs) == 1:
+    mycontext['myip'] = getmyip()
+    mycontext['port'] = int(callargs[0])
+    ipfile = open("ips.txt", "r")
+    mycontext['ips'] = [line.rstrip() for line in ipfile]
+
+    listencommhandle = waitforconn(mycontext['myip'],mycontext['port'],board)
+  # Running locally:
+  # whenever we get a connection on 127.0.0.1:12345 we'll call board
+  else:
+    mycontext['port'] = 12345
+    mycontext['myip'] = '127.0.0.1'
+    mycontext['ips'] = []
+    listencommhandle = waitforconn(mycontext['myip'],mycontext['port'],board)

@@ -1,0 +1,20 @@
+Students.id, Courses.code, Program.name -> Everything (minimal superkey)
+Students.id, Courses.code, Programs.abbreviation -> Everything (minimal superkey)
+
+Programs.name -> Programs.abbreviation
+Programs.abbreviation -> Programs.name
+
+Courses.code, Waits.queueNum -> Students.id
+Courses.code -> LimitedCourses.numStudents
+Courses.code -> Courses.numCredits
+Courses.code->Courses.name
+
+Students.id -> Students.name
+Students.id -> Programs.name
+Students.id -> Branches.name
+Students.id, Courses.code -> Finishes.grade
+Students.id, Courses.code -> Waits.queueNum
+
+
+Departments.name -> Departments.abbreviation
+Departments.abbreviation -> Departments.name

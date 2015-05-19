@@ -1,0 +1,262 @@
+def board(ip, port, sockobj, thiscommhandle, listencommhandle):
+  try:
+    msgheader = sockobj.recv(1024) # Receive message,
+  except Exception,e:
+    print "Receive network error, socket closed?"+ str(e)
+    stopcomm(thiscommhandle) 
+    return
+
+  # React depending on message type: HTTP GET or POST, or some other type of communication.
+  # "READ"
+  if msgheader.startswith('GET'): 
+    print 'GET REQUEST ON '+mycontext['myip']+'! Read requests sent to:'
+    length = (mycontext['len']+1)/2-1
+    print 'number to sample for read: '+str(length)
+    randomsample = random_sample(length)
+    for samp in randomsample:
+      print 'sending to' + samp
+    mycontext['messagelock'].acquire()  
+
+    mycontext['messages_sent'] = length 
+    send_to_ips("__read__"+mycontext['myip']+"__endread__", randomsample)
+
+    while (mycontext['messages_sent'] > 0):
+      pass
+    mycontext['messagelock'].release()  
+    sockobj.send(getHTML(mycontext['comments']))
+    stopcomm(thiscommhandle)
+    # "WRITE"
+  elif msgheader.startswith('POST'):
+    print 'POST REQUEST ON '+mycontext['myip']+'!'
+    message = msgheader[msgheader.index('comment=')+len('comment='):] + '<br>'
+
+    # lock W nodes in ascending order
+    length = mycontext['len']/2
+    print 'number to sample for write: '+str(length)
+    randomsample = random_sample(length)
+    randomsample.sort()
+    for i in randomsample:
+      print i
+
+    lock_nodes = False
+    while not lock_nodes:
+      mycontext['messagelock'].acquire()
+      print 'locking nodes'
+      mycontext['locks_sent'] = length
+      mycontext['lock_status'] = True
+      mycontext['locks_pending'] = []
+      send_to_ips("__lock__1__endlock__"+mycontext['myip'], randomsample)
+      while (mycontext['locks_sent'] > 0):
+        pass
+
+      if mycontext['lock_status']:
+        lock_nodes = True
+      else:
+        send_to_ips("__lock__0__endlock__"+mycontext['myip'], mycontext['locks_pending'])
+        mycontext['messagelock'].release()
+        sleep(randomfloat())
+
+    mycontext['messages_sent'] = length 
+    print("locks acquired")
+    # Read blackboards from W nodes
+    send_to_ips("__read__"+mycontext['myip']+"__endread__", randomsample)
+
+    while (mycontext['messages_sent'] > 0):
+      pass
+
+    print("here")
+    # at this point we should have the newest board, as in the read call
+    # append new message to newest one
+    mycontext['myclock'] += 1
+    mycontext['comments'].append([mycontext['myclock'],mycontext['myip'],message])
+
+
+    # write blackboard to W nodes
+    send_to_ips("__write__"+getString(mycontext['comments'])+"__endwrite__", randomsample)
+    mycontext['messagelock'].release()
+
+    # Display updated blackboard
+    sockobj.send(getHTML(mycontext['comments']))
+  else:
+    stopcomm(thiscommhandle)
+
+    # Add new message to list
+    mycontext['requestlock'].acquire()
+    if msgheader.startswith('__lock__'):
+      msgindex = msgheader.index('__endlock__')
+      msg = int(msgheader[8:msgindex])
+      returnip = ip
+      if msg == 1:
+        lock = mycontext['messagelock'].acquire(0)
+        if lock: 
+          send_to_ip(returnip,"__lockstatus__1")
+        else:
+          send_to_ip(returnip,"__lockstatus__0")
+      else: 
+        mycontext['messagelock'].release()
+
+  
+    elif msgheader.startswith('__lockstatus__'):
+      if (mycontext['locks_sent'] > 0):
+        print("got lock status back from"+ip)
+        msg = bool(int(msgheader[14]))
+        mycontext['locks_sent'] -= 1
+        mycontext['lock_status'] = mycontext['lock_status'] and msg
+        if msg:
+          print("lock acquired on "+ip)
+          mycontext['locks_pending'].append(ip)
+        else:
+          print("lock not acquired on "+ip)
+      else:
+        print("didn't issue any locks")
+
+
+    elif msgheader.startswith('__read__'):
+      print 'Got read request'
+      msgindex = msgheader.index('__endread__')
+      return_ip = msgheader[8:msgindex]
+      print 'from ip: '+return_ip+'! Responding with my ('+mycontext['myip']+') board'
+      send_to_ip(return_ip,'__readreturn__'+getString(mycontext['comments'])+'__endreadreturn__'+str(mycontext['myclock']))
+    
+    elif msgheader.startswith('__readreturn__'):
+      print 'Got a board back, checking to see if it is newer than mine'
+      if mycontext['messages_sent'] > 0:
+        comindex = msgheader.index('__endreadreturn__')
+        comments = msgheader[14:comindex]
+        print 'its contents are ' + comments
+        comments = getList(comments)
+        clock = int(msgheader[comindex+17:])
+        print 'with clock value '+str(clock)
+        if clock > mycontext['myclock']:
+          mycontext['myclock'] = clock
+          mycontext['comments'] = comments
+
+        mycontext['messages_sent'] -= 1   
+        print str(mycontext['messages_sent']) + " mesages remaining"
+      else:
+        print "no board request issued, wtf?"  
+        
+    elif msgheader.startswith('__write__'):
+      print "A board was written to us"
+      endIndex = msgheader.index('__endwrite__')
+      comments = msgheader[9:endIndex]
+      mycontext['comments'] = getList(comments)
+      mycontext['messagelock'].release()
+
+    else:
+      print 'Unknown message received: '+msgheader+' from '+str(ip)+':'+str(port)
+    
+    mycontext['requestlock'].release()
+
+def send_to_ip(ip,message):
+  remote_sockobj = None;
+  try: 
+    remote_sockobj = openconn(ip, mycontext['port'])
+    remote_sockobj.send(message)
+    remote_sockobj.close()
+    return True
+  except Exception, e:
+    print "Send network error, receiving socket closed? " + str(e)
+    if remote_sockobj :
+      remote_sockobj.close()
+    return False
+
+def send_to_ips(message, ips = []):
+  if len(ips) == 0:
+    ips = mycontext['ips']
+  for remote_ip in ips:
+    send_to_ip(remote_ip,message)
+
+# "random"
+def random_sample(length):
+  randomsample = []
+  ips = mycontext['ips']
+
+  while (length > 0):
+    sample = ips[(int(randomfloat()*100))%(mycontext['len']-1)]
+    if (sample not in randomsample):
+      randomsample.append(sample)
+      length -= 1
+  return randomsample
+
+# for now lets send the whole board
+# keeping the count in the array for future optimization 
+# (maybe its possible to not send the whole board)
+def getString(comments):
+  result = ''
+  for comment in comments:
+    result += str(comment[0]) + "__1__" + comment[1] + "__2__"+ comment[2] + "__3__"
+  return result
+
+def getList(comments):
+  commentList = []
+  commentLines = comments.split("__3__")
+  commentLines.pop()
+  for line in commentLines:
+    ipIndex = line.index("__1__")
+    count = int(line[0:ipIndex])
+    commentIndex = line.index("__2__")
+    ip = line[ipIndex+5:commentIndex]
+    comment = line[commentIndex+5:]
+    commentList.append([count,ip,comment])
+
+  return commentList
+
+
+def getHTML(comments):
+  messageboard = ''
+  for comment in comments:
+    messageboard += str(comment[0]) + ": " + comment[2]
+
+  leaderfield = ""
+  htmlresponse = """
+    <html>
+    <head>
+      <meta content="text/html; charset=utf-8" http-equiv="content-type">
+      <title>Blackboard GroupName</title>
+    </head>
+    <body>
+      <h2> Board Content</h2>
+      <p>""" + messageboard + """</p>
+      <br>
+      <h3>Submit to board<h3>
+      <textarea rows="4" cols="50" name="comment" form="usrform"></textarea>
+      <form action="" id="usrform" method="post">
+      <input type="submit">
+      </form>
+    </body>
+    </html>
+    """
+  htmlresponse = "HTTP/1.1 200 OK\r\nContent-type: text/html\r\n" + \
+    "Content-length: %i\r\n\r\n%s" % (len(htmlresponse), htmlresponse)
+  return htmlresponse
+
+  
+if callfunc == 'initialize':
+  #changed this from a string to an array to now hold clock value, message, and the sending ip (to resolve conflicting clock(post) numbers)
+  mycontext['comments'] = [] 
+  mycontext['comments'].append([0,"0:0:0:0","test<br>"])
+  mycontext['messagelock'] = getlock()
+  mycontext['requestlock'] = getlock()
+  #new clock variable which is essentially the post number
+  mycontext['myclock'] = 0
+
+  if len(callargs) > 1:
+    raise Exception("Too many call arguments")
+  # Running remotely (assuming that we pass input argument only remotely):
+  # whenever this vessel gets a connection on its IPaddress:Clearinghouseport it'll call function board
+  elif len(callargs) == 1:
+    mycontext['myip'] = getmyip()
+    mycontext['port'] = int(callargs[0])
+    ipfile = open("ips.txt", "r")
+    mycontext['ips'] = [ip for ip in [line.rstrip() for line in ipfile] if ip != mycontext['myip']]
+    mycontext['len'] = len(mycontext['ips'])+1
+
+    listencommhandle = waitforconn(mycontext['myip'],mycontext['port'],board)
+  # Running locally:
+  # whenever we get a connection on 127.0.0.1:12345 we'll call board
+  else:
+    mycontext['port'] = 12345
+    mycontext['myip'] = '127.0.0.1'
+    mycontext['ips'] = []
+    listencommhandle = waitforconn(mycontext['myip'],mycontext['port'],board)

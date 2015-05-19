@@ -1,0 +1,63 @@
+ Departments (_name, abbreviation)
+	name unique
+	abbreviation unique
+ Programs (_name, abbreviation)
+	name unique
+	abbreviation unique 
+Branches (_name, _program)
+       program -> Programs.name
+
+ Courses (_code, name, credits, department)
+       department->Departments.name
+  
+ LimitedCourses (_course, #students)
+       course -> Courses.code
+
+The E/R approach was used approach was used for this ISA relation because it would be the easiest to implement. At first I thought this was actually the object oriented approach because it seems like the ‘limitedCourse’ entity is inheriting the traits of ‘course’ entity (similarly to the object-oriented approach in programming languages). After further clarification of this from the textbook, it seems that this is actually the E/R approach and the object-oriented has its own new objects.  
+ 
+ Students (_id, name, branch)
+       program -> Programs.name
+  	branch -> Branch.name
+
+  Waits(_student, _course, queueNum)
+      student -> Students.id
+      course -> LimitedCourses.code
+      (courses, queueNum) unique
+
+ Takes (_student, _course)
+       student -> Students.id
+       course-> Courses.code
+
+  Finishes(_student, _course, grade)
+       student -> Students.id
+       course -> Courses.code 
+ 
+ Requires (_course, _requiredCourse)
+       course -> Courses.code
+       requiredCourse -> Courses.code
+
+ Classifications(_type)
+ 
+ HasClassification(_course, _classification)
+       course -> Courses.code
+       classification -> Classifications.type
+
+ Hosts(_department, _program)
+       department -> Departments.name
+       program -> Programs.name
+  
+ MandatoryInProgram(_program, _course)
+       program -> Programs.name
+       course -> Courses.code
+
+ Recommends(_program, _branch, _course)
+       (program, branch) -> Branches.(program, name)
+       course -> Courses.code
+ 
+
+
+I originally had the schema having branch as an optional entity. This is due to the fact that I originally didn’t understand the branch entity in itself, and I was not aware that it was a mandatory thing for students to have in Sweden. I have updated the schema so that it is now mandatory.
+Update: With the double reference in the Picks relation, I do not think that it is possible for a student to be in two different programs, is that not the case
+Update again: I have taken your advice and removed the BelongsTo relation due to its redundancy
+
+In addition I have updated my schema so that there are unique constraints on certain fields. 
